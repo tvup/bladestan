@@ -6,14 +6,19 @@ namespace TomasVotruba\Bladestan\TemplateCompiler\Rules;
 
 use PhpParser\Node;
 use PhpParser\Node\Expr\MethodCall;
-use PHPStan\Rules\DirectRegistry;
+use PHPStan\Rules\Registry;
 use PHPStan\Rules\FunctionCallParametersCheck;
 use PHPStan\Rules\Methods\CallMethodsRule;
 use PHPStan\Rules\Rule;
 use TomasVotruba\Bladestan\TemplateCompiler\Reflection\PrivatesAccessor;
 
-final class TemplateRulesRegistry extends DirectRegistry
+final class TemplateRulesRegistry implements Registry
 {
+    /**
+     * @var array<string, array<Rule<\PhpParser\Node>>>
+     */
+    private array $rulesRegistry = [];
+
     /**
      * @var string[]
      */
@@ -27,8 +32,7 @@ final class TemplateRulesRegistry extends DirectRegistry
      */
     public function __construct(array $rules)
     {
-        $activeRules = $this->filterActiveRules($rules);
-        parent::__construct($activeRules);
+        $this->rulesRegistry = $this->filterAndRegisterRules($rules);
     }
 
     /**
@@ -38,7 +42,7 @@ final class TemplateRulesRegistry extends DirectRegistry
      */
     public function getRules(string $nodeType): array
     {
-        $activeRules = parent::getRules($nodeType);
+        $activeRules = $this->rulesRegistry[$nodeType] ?? [];
 
         // only fix in a weird test case setup
         if (defined('PHPUNIT_COMPOSER_INSTALL') && $nodeType === MethodCall::class) {
@@ -61,11 +65,11 @@ final class TemplateRulesRegistry extends DirectRegistry
 
     /**
      * @param array<Rule<Node>> $rules
-     * @return array<Rule<Node>>
+     * @return array<string, array<Rule<Node>>>
      */
-    private function filterActiveRules(array $rules): array
+    private function filterAndRegisterRules(array $rules): array
     {
-        $activeRules = [];
+        $rulesRegistry = [];
 
         foreach ($rules as $rule) {
             foreach (self::EXCLUDED_RULES as $excludedRule) {
@@ -74,9 +78,23 @@ final class TemplateRulesRegistry extends DirectRegistry
                 }
             }
 
-            $activeRules[] = $rule;
+            $nodeType = $this->getNodeType($rule);
+            if (!isset($rulesRegistry[$nodeType])) {
+                $rulesRegistry[$nodeType] = [];
+            }
+
+            $rulesRegistry[$nodeType][] = $rule;
         }
 
-        return $activeRules;
+        return $rulesRegistry;
+    }
+
+    /**
+     * @param Rule<Node> $rule
+     * @return string
+     */
+    private function getNodeType(Rule $rule): string
+    {
+        return $rule->getNodeType();
     }
 }

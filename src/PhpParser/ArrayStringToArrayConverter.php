@@ -28,7 +28,7 @@ final class ArrayStringToArrayConverter
         private readonly ConstExprEvaluator $constExprEvaluator
     ) {
         $parserFactory = new ParserFactory();
-        $this->parser = $parserFactory->create(ParserFactory::ONLY_PHP7);
+        $this->parser = $parserFactory->createForHostVersion();
     }
 
     /**

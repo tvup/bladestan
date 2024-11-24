@@ -15,7 +15,7 @@ final class SimplePhpParser
     public function __construct()
     {
         $parserFactory = new ParserFactory();
-        $this->nativePhpParser = $parserFactory->create(ParserFactory::ONLY_PHP7);
+        $this->nativePhpParser = $parserFactory->createForHostVersion();
     }
 
     /**

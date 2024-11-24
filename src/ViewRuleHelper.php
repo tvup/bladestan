@@ -13,6 +13,7 @@ use TomasVotruba\Bladestan\Compiler\BladeToPHPCompiler;
 use TomasVotruba\Bladestan\ErrorReporting\Blade\TemplateErrorsFactory;
 use TomasVotruba\Bladestan\TemplateCompiler\ErrorFilter;
 use TomasVotruba\Bladestan\TemplateCompiler\PHPStan\FileAnalyserProvider;
+use TomasVotruba\Bladestan\TemplateCompiler\Rules\TemplateRulesRegistry;
 use TomasVotruba\Bladestan\TemplateCompiler\TypeAnalyzer\TemplateVariableTypesResolver;
 use TomasVotruba\Bladestan\TemplateCompiler\ValueObject\RenderTemplateWithParameters;
 use TomasVotruba\Bladestan\TemplateCompiler\ValueObject\VariableAndType;
@@ -64,7 +65,7 @@ final class ViewRuleHelper
         return $ruleErrors;
     }
 
-    public function setRegistry(Registry $registry): void
+    public function setRegistry(TemplateRulesRegistry $registry): void
     {
         $this->registry = $registry;
     }
