@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace TomasVotruba\Bladestan\Tests\Rules\Source;
+namespace Bladestan\Tests\Rules\Source;
 
 use Illuminate\Contracts\Support\Arrayable;
 
@@ -14,7 +14,7 @@ class SomeDto implements Arrayable
     /**
      * @return array{foo: string}
      */
-    public function toArray()
+    public function toArray(): array
     {
         return [
             'foo' => 'bar',

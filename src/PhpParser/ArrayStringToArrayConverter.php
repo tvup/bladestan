@@ -2,22 +2,22 @@
 
 declare(strict_types=1);
 
-namespace TomasVotruba\Bladestan\PhpParser;
+namespace Bladestan\PhpParser;
 
 use PhpParser\ConstExprEvaluationException;
 use PhpParser\ConstExprEvaluator;
+use PhpParser\Lexer;
 use PhpParser\Node\Expr;
 use PhpParser\Node\Expr\Array_;
-use PhpParser\Node\Expr\ArrayItem;
 use PhpParser\Node\Stmt\Expression;
 use PhpParser\Parser;
-use PhpParser\ParserFactory;
+use PhpParser\Parser\Php7;
 use PhpParser\PrettyPrinter\Standard;
 
 /**
- * This class converts the string `['foo' => 'bar', 'bar' => 'baz']` to actual PHP array `['foo' => 'bar', 'bar' => 'baz']`
+ * This class converts the string `"['foo', 'bar' => 'baz']"` to actual PHP array `[0 => "'foo'", 'bar' => "'baz'"]`
  *
- * @see \TomasVotruba\Bladestan\Tests\PHPParser\ArrayStringToArrayConverterTest
+ * @see \Bladestan\Tests\PHPParser\ArrayStringToArrayConverterTest
  */
 final class ArrayStringToArrayConverter
 {
@@ -27,12 +27,11 @@ final class ArrayStringToArrayConverter
         private readonly Standard $standard,
         private readonly ConstExprEvaluator $constExprEvaluator
     ) {
-        $parserFactory = new ParserFactory();
-        $this->parser = $parserFactory->create(ParserFactory::ONLY_PHP7);
+        $this->parser = new Php7(new Lexer());
     }
 
     /**
-     * @return array<string, string>
+     * @return array<string>
      */
     public function convert(string $array): array
     {
@@ -56,26 +55,22 @@ final class ArrayStringToArrayConverter
         }
 
         $array = $stmts[0]->expr;
-        assert($array instanceof Array_);
 
         $result = [];
 
         foreach ($array->items as $item) {
-            assert($item instanceof ArrayItem);
-
-            if (! $item->key instanceof Expr) {
-                continue;
-            }
-
-            $key = $this->resolveKey($item->key);
-
-            if (! is_string($key)) {
-                continue;
-            }
-
             $value = $this->standard->prettyPrintExpr($item->value);
 
-            $result[$key] = $value;
+            if ($item->key instanceof Expr) {
+                $key = $this->resolveKey($item->key);
+                if (! is_string($key) && ! is_int($key)) {
+                    continue;
+                }
+
+                $result[$key] = $value;
+            } else {
+                $result[] = $value;
+            }
         }
 
         return $result;

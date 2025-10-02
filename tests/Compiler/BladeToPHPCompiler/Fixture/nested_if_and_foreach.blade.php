@@ -12,18 +12,25 @@
 -----
 <?php
 
+/** @var Illuminate\Support\ViewErrorBag $errors */
+/** @var Illuminate\View\Factory $__env */
+/** @var Illuminate\Foundation\Application $app */
 /** file: foo.blade.php, line: 1 */
 if (isset($errors)) {
     /** file: foo.blade.php, line: 2 */
     if (count($errors) > 0) {
         /** file: foo.blade.php, line: 5 */
         $__currentLoopData = $errors->all();
+        $__env->addLoop($__currentLoopData);
         foreach ($__currentLoopData as $error) {
-            $loop = new \TomasVotruba\Bladestan\ValueObject\Loop();
+            $__env->incrementLoopIndices();
+            $loop = new \Bladestan\ValueObject\Loop();
             /** file: foo.blade.php, line: 6 */
             echo e($error);
-            unset($loop);
+            /** file: foo.blade.php, line: 7 */
         }
+        $__env->popLoop();
+        $loop = null;
         /** file: foo.blade.php, line: 10 */
     }
     /** file: foo.blade.php, line: 11 */

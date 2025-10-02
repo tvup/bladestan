@@ -2,114 +2,96 @@
 
 declare(strict_types=1);
 
-namespace TomasVotruba\Bladestan\PhpParser\NodeVisitor;
+namespace Bladestan\PhpParser\NodeVisitor;
 
-use Nette\Utils\Json;
+use Illuminate\Support\Str;
 use PhpParser\Node;
+use PhpParser\Node\Arg;
+use PhpParser\Node\Expr;
+use PhpParser\Node\Expr\Array_;
+use PhpParser\Node\Expr\CallLike;
 use PhpParser\Node\Expr\FuncCall;
 use PhpParser\Node\Expr\MethodCall;
-use PhpParser\Node\FunctionLike;
+use PhpParser\Node\Expr\New_;
+use PhpParser\Node\Expr\StaticCall;
 use PhpParser\Node\Identifier;
-use PhpParser\Node\Name;
-use PhpParser\Node\Name\FullyQualified;
-use PhpParser\Node\Stmt;
+use PhpParser\Node\Scalar\String_;
 use PhpParser\NodeVisitorAbstract;
-use TomasVotruba\Bladestan\Exception\ShouldNotHappenException;
-use Webmozart\Assert\Assert;
 
 /**
  * @api part of phpstan node visitors
  */
 final class ViewFunctionArgumentsNodeVisitor extends NodeVisitorAbstract
 {
-    /**
-     * @var array<string, null|array<string, Node\Arg[]>>
-     */
-    private array $argsByMethodNameStack = [];
-
-    /**
-     * @param Stmt[] $nodes
-     * @return Stmt[]|null
-     */
-    public function beforeTraverse(array $nodes): ?array
-    {
-        $this->argsByMethodNameStack = [];
-
-        return null;
-    }
-
     public function enterNode(Node $node): ?Node
     {
-        if ($node instanceof FuncCall && $node->name instanceof FullyQualified && $node->name->toCodeString() === '\view' && $this->argsByMethodNameStack !== []) {
-            $node->setAttribute(
-                'viewWithArgs',
-                $this->argsByMethodNameStack[array_key_last($this->argsByMethodNameStack)],
-            );
-        }
-
-        if ($node instanceof FunctionLike) {
-            // is this necessary?
-            $this->argsByMethodNameStack['foo'] = null;
-        }
-
-        if ($node instanceof MethodCall && $node->name instanceof Identifier && str_starts_with(
-            $node->name->name,
-            'with'
-        )) {
-            $rootViewNode = $node;
-            $namesAndArgs = [];
-            while ($rootViewNode->var instanceof MethodCall) {
-                if ($rootViewNode->name instanceof Identifier) {
-                    $methodName = $rootViewNode->name->toString();
-                } else {
-                    // @todo test
-                    break;
+        if ($node instanceof MethodCall
+            && $node->var instanceof CallLike
+            && $node->name instanceof Identifier
+            && str_starts_with($node->name->name, 'with')
+            && (count($node->args) === 1 || count($node->args) === 2)
+        ) {
+            $root = $node->var;
+            while (true) {
+                if ($root instanceof StaticCall || $root instanceof New_ || $root instanceof FuncCall) {
+                    break; // Found root
                 }
 
-                $namesAndArgs[$methodName] = $rootViewNode->getArgs();
-                $rootViewNode = $rootViewNode->var;
-            }
-
-            if ($rootViewNode->name instanceof Identifier) {
-                $methodName = $rootViewNode->name->toString();
-            } else {
-                // @todo test
-                throw new ShouldNotHappenException();
-            }
-
-            $namesAndArgs[$methodName] = $rootViewNode->getArgs();
-
-            if (
-                $rootViewNode->var instanceof FuncCall &&
-                $rootViewNode->var->name instanceof Name &&
-                $rootViewNode->var->name->toCodeString() === 'view' &&
-                $rootViewNode->var->getArgs() !== []
-            ) {
-                $cacheKey = Json::encode($rootViewNode->var);
-                Assert::string($cacheKey);
-                Assert::notEmpty($cacheKey);
-
-                //  = md5(json_encode($rootViewNode->var));
-
-                if (! array_key_exists($cacheKey, $this->argsByMethodNameStack)) {
-                    $this->argsByMethodNameStack[$cacheKey] = $namesAndArgs;
+                if (! $root instanceof MethodCall) {
+                    return null; // We only support chains
                 }
+
+                if (! $root->name instanceof Identifier) {
+                    return null;
+                }
+
+                if (! str_starts_with($root->name->name, 'with')) {
+                    break; // Found root
+                }
+
+                $root = $root->var;
             }
+
+            $vars = $this->extractVariables($node->name->name, $node->getArgs());
+            if ($vars === []) {
+                return null;
+            }
+
+            /** @var array<string, Expr> */
+            $existing = $root->getAttribute('viewWithArgs', []);
+            $root->setAttribute('viewWithArgs', $vars + $existing);
         }
 
         return null;
     }
 
-    public function leaveNode(Node $node): ?Node
+    /**
+     * @param array<Arg> $args
+     *
+     * @return array<string, Expr>
+     */
+    private function extractVariables(string $name, array $args): array
     {
-        if (! $node instanceof FuncCall) {
-            return null;
+        $values = [];
+        if ($name === 'with') {
+            if (count($args) === 2 && $args[0]->value instanceof String_) {
+                // ->with('key', $var)
+                $values[$args[0]->value->value] = $args[1]->value;
+            } elseif (count($args) === 1 && $args[0]->value instanceof Array_) {
+                // ->with(['key' => $var])
+                foreach ($args[0]->value->items as $element) {
+                    if (! $element->key instanceof String_) {
+                        continue;
+                    }
+
+                    $values[$element->key->value] = $element->value;
+                }
+            }
+        } elseif (count($args) === 1) {
+            // ->withKey($var)
+            $values[Str::camel(substr($name, 4))] = $args[0]->value;
         }
 
-        if ($node->name instanceof Name && $node->name->toCodeString() === 'view') {
-            array_pop($this->argsByMethodNameStack);
-        }
-
-        return null;
+        return $values;
     }
 }

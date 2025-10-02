@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace TomasVotruba\Bladestan\Tests\PhpParser;
+namespace Bladestan\Tests\PhpParser;
 
+use Bladestan\PhpParser\ArrayStringToArrayConverter;
 use Iterator;
 use PHPStan\Testing\PHPStanTestCase;
 use PHPUnit\Framework\Attributes\DataProvider;
-use TomasVotruba\Bladestan\PhpParser\ArrayStringToArrayConverter;
 
 final class ArrayStringToArrayConverterTest extends PHPStanTestCase
 {
@@ -51,13 +51,13 @@ final class ArrayStringToArrayConverterTest extends PHPStanTestCase
         yield ['123', []];
         yield ["'foo'", []];
         yield ['[]', []];
-        yield ['[10]', []];
-        yield ["['foo', 123]", []];
+        yield ['[10]', ['10']];
+        yield ["['foo', 123]", ["'foo'", '123']];
         yield ["[\$foo => 'bar']", []];
     }
 
     /**
-     * @return string[]
+     * @return list<string>
      */
     public static function getAdditionalConfigFiles(): array
     {

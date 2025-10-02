@@ -2,29 +2,71 @@
 
 declare(strict_types=1);
 
-namespace TomasVotruba\Bladestan\ValueObject;
+namespace Bladestan\ValueObject;
 
-final class IncludedViewAndVariables
+final class IncludedViewAndVariables extends AbstractInlinedElement
 {
+    /**
+     * @var array<string>
+     */
+    private array $availableVariables;
+
     /**
      * @param array<string, string> $variablesAndValues
      */
     public function __construct(
-        private readonly string $includedViewName,
-        private readonly array $variablesAndValues
+        string $rawPhpContent,
+        string $includedViewName,
+        array $variablesAndValues,
+        private readonly ?string $extract,
     ) {
+        parent::__construct($rawPhpContent, $includedViewName, $variablesAndValues);
     }
 
-    /**
-     * @return array<string, string>
-     */
-    public function getVariablesAndValues(): array
+    public function preprocessTemplate(string $includedContent, array $sharedVars): string
     {
-        return $this->variablesAndValues;
+        return $includedContent;
     }
 
-    public function getIncludedViewName(): string
+    public function getInnerScopeVariableNames(array $availableVariables): array
     {
-        return $this->includedViewName;
+        // Extract variables used to create additional data
+        foreach ($this->variablesAndValues as $variableAndValue) {
+            preg_match_all('#\$([a-zA-Z_\x7f-\xff][a-zA-Z0-9_\x7f-\xff]*)#s', $variableAndValue, $variableNames);
+            $availableVariables = array_merge($availableVariables, $variableNames[1]);
+        }
+
+        if ($this->extract) {
+            $availableVariables[] = substr($this->extract, 1);
+        }
+
+        $this->availableVariables = $availableVariables;
+
+        return array_unique(array_merge($this->availableVariables, array_keys($this->variablesAndValues)));
+    }
+
+    public function generateInlineRepresentation(string $includedContent): string
+    {
+        $use = $this->buildUse($this->availableVariables);
+
+        $variables = $this->variablesAndValues;
+        $includedViewVariables = implode(
+            PHP_EOL,
+            array_map(
+                static fn (string $key, string $value): string => "\${$key} = {$value};",
+                array_keys($variables),
+                $variables
+            )
+        );
+        if ($this->extract) {
+            $includedViewVariables .= PHP_EOL . "extract({$this->extract});";
+        }
+
+        return <<<STRING
+(function (){$use} {
+    {$includedViewVariables}
+    {$includedContent}
+});
+STRING;
     }
 }

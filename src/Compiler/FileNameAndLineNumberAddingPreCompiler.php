@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace TomasVotruba\Bladestan\Compiler;
+namespace Bladestan\Compiler;
 
-use Illuminate\Support\Str;
-use TomasVotruba\Bladestan\Configuration\Configuration;
+use Illuminate\Contracts\View\Factory as ViewFactory;
+use Illuminate\View\FileViewFinder;
 
 final class FileNameAndLineNumberAddingPreCompiler
 {
@@ -20,34 +20,75 @@ final class FileNameAndLineNumberAddingPreCompiler
      */
     private const PHP_PARTIAL_COMMENT = '#^(\* )?@(var|param|method|extends|implements|template) +(.*?) \$[a-zA-Z_\x80-\xff][a-zA-Z0-9_\x80-\xff]*#';
 
-    public function __construct(
-        private readonly Configuration $configuration
-    ) {
+    /**
+     * @see https://regex101.com/r/rJXmfO/1
+     * @var string
+     */
+    private const START_OF_MULTILINE_COMPONENT = '/^.*<(?:livewire:|x-)\S+[^>](?:\s+[^>]+?="[^"]*?")*[^>]*$/';
+
+    /**
+     * @see https://regex101.com/r/IoNxTs/1
+     * @var string
+     */
+    private const END_OF_MULTILINE_COMPONENT = '/^(?:\s+[^>]+?="[^"]*?")*\s*\/?>/';
+
+    /**
+     * @var list<string>
+     */
+    private readonly array $paths;
+
+    public function __construct()
+    {
+        $finder = resolve(ViewFactory::class)->getFinder();
+        assert($finder instanceof FileViewFinder);
+        /** @var array<array<string>> */
+        $hints = $finder->getHints();
+        /** @var array<string> */
+        $rawPaths = array_merge($finder->getPaths(), ...array_values($hints));
+        $rawPaths[] = base_path();
+
+        $paths = [];
+        foreach ($rawPaths as $rawPath) {
+            if ($realPath = realpath($rawPath)) {
+                $paths[] = $realPath . DIRECTORY_SEPARATOR;
+            }
+        }
+
+        $paths = array_unique($paths);
+        usort($paths, fn ($a, $b): int => strlen($b) <=> strlen($a));
+
+        $this->paths = $paths;
+    }
+
+    public function getRelativePath(string $fileName): string
+    {
+        $fileName = realpath($fileName) ?: $fileName;
+        foreach ($this->paths as $path) {
+            if (str_starts_with($fileName, $path)) {
+                return substr($fileName, strlen($path));
+            }
+        }
+
+        return $fileName;
     }
 
     public function completeLineCommentsToBladeContents(string $fileName, string $fileContents): string
     {
-        foreach ($this->configuration->getTemplatePaths() as $templatePath) {
-            $templatePath = rtrim($templatePath, '/') . '/';
-
-            if (str_contains($fileName, $templatePath)) {
-                $fileName = Str::after($fileName, $templatePath);
-                break;
-            }
-        }
-
-        // @note when is file name "0"?
-        if ($fileName === '0') {
-            return '';
-        }
-
+        $fileName = $this->getRelativePath($fileName);
         $lines = explode(PHP_EOL, $fileContents);
 
+        $insideComponentTag = false;
         $lineNumber = 1;
 
         foreach ($lines as $key => $line) {
-            if (! $this->shouldSkip($line)) {
-                $lines[$key] = sprintf('/** file: %s, line: %d */', $fileName, $lineNumber) . $line;
+            if (! $insideComponentTag && ! $this->shouldSkip($line)) {
+                $lines[$key] = "/** file: {$fileName}, line: {$lineNumber} */{$line}";
+            }
+
+            if (! $insideComponentTag) {
+                $insideComponentTag = preg_match(self::START_OF_MULTILINE_COMPONENT, $line) === 1;
+            } else {
+                $insideComponentTag = preg_match(self::END_OF_MULTILINE_COMPONENT, $line) !== 1;
             }
 
             ++$lineNumber;

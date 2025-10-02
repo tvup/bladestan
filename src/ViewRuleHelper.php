@@ -2,124 +2,111 @@
 
 declare(strict_types=1);
 
-namespace TomasVotruba\Bladestan;
+namespace Bladestan;
 
+use Bladestan\Compiler\BladeToPHPCompiler;
+use Bladestan\ErrorReporting\Blade\TemplateErrorsFactory;
+use Bladestan\NodeAnalyzer\TemplateFilePathResolver;
+use Bladestan\TemplateCompiler\ErrorFilter;
+use Bladestan\TemplateCompiler\PHPStan\FileAnalyserProvider;
+use Bladestan\TemplateCompiler\ValueObject\RenderTemplateWithParameters;
+use Bladestan\ValueObject\CompiledTemplate;
+use InvalidArgumentException;
 use PhpParser\Node\Expr\CallLike;
-use PHPStan\Analyser\Error;
 use PHPStan\Analyser\Scope;
-use PHPStan\Rules\Registry;
-use PHPStan\Rules\RuleError;
-use TomasVotruba\Bladestan\Compiler\BladeToPHPCompiler;
-use TomasVotruba\Bladestan\ErrorReporting\Blade\TemplateErrorsFactory;
-use TomasVotruba\Bladestan\TemplateCompiler\ErrorFilter;
-use TomasVotruba\Bladestan\TemplateCompiler\PHPStan\FileAnalyserProvider;
-use TomasVotruba\Bladestan\TemplateCompiler\TypeAnalyzer\TemplateVariableTypesResolver;
-use TomasVotruba\Bladestan\TemplateCompiler\ValueObject\RenderTemplateWithParameters;
-use TomasVotruba\Bladestan\TemplateCompiler\ValueObject\VariableAndType;
-use TomasVotruba\Bladestan\ValueObject\CompiledTemplate;
+use PHPStan\Collectors\Registry;
+use PHPStan\Rules\IdentifierRuleError;
 
 final class ViewRuleHelper
 {
-    private Registry $registry;
-
     public function __construct(
-        private readonly TemplateVariableTypesResolver $templateVariableTypesResolver,
         private readonly FileAnalyserProvider $fileAnalyserProvider,
         private readonly TemplateErrorsFactory $templateErrorsFactory,
         private readonly BladeToPHPCompiler $bladeToPhpCompiler,
+        private readonly TemplateFilePathResolver $templateFilePathResolver,
         private readonly ErrorFilter $errorFilter,
     ) {
     }
 
     /**
-     * @param RenderTemplateWithParameters[] $renderTemplatesWithParameters
-     *
-     * @return RuleError[]
+     * @throws InvalidArgumentException
+     * @return list<IdentifierRuleError>
      */
-    public function processNode(CallLike $callLike, Scope $scope, array $renderTemplatesWithParameters): array
-    {
-        $ruleErrors = [];
-        foreach ($renderTemplatesWithParameters as $renderTemplateWithParameter) {
-            $variablesAndTypes = $this->templateVariableTypesResolver->resolveArray(
-                $renderTemplateWithParameter->getParametersArray(),
-                $scope
-            );
+    public function processNode(
+        CallLike $callLike,
+        Scope $scope,
+        RenderTemplateWithParameters $renderTemplateWithParameters
+    ): array {
+        $compiledTemplate = $this->compileToPhp(
+            $renderTemplateWithParameters,
+            $scope->getFile(),
+            $callLike->getLine()
+        );
 
-            $compiledTemplate = $this->compileToPhp(
-                $renderTemplateWithParameter->getTemplateFilePath(),
-                $variablesAndTypes,
-                $scope->getFile(),
-                $callLike->getLine()
-            );
-
-            if (! $compiledTemplate instanceof CompiledTemplate) {
-                continue;
-            }
-
-            $currentRuleErrors = $this->processTemplateFilePath($compiledTemplate);
-
-            $ruleErrors = array_merge($ruleErrors, $currentRuleErrors);
+        if (! $compiledTemplate instanceof CompiledTemplate) {
+            return [];
         }
 
-        return $ruleErrors;
-    }
-
-    public function setRegistry(Registry $registry): void
-    {
-        $this->registry = $registry;
+        return $this->processTemplateFilePath($compiledTemplate);
     }
 
     /**
-     * @return RuleError[]
+     * @return list<IdentifierRuleError>
      */
     private function processTemplateFilePath(CompiledTemplate $compiledTemplate): array
     {
         $fileAnalyser = $this->fileAnalyserProvider->provide();
+        $templateRulesRegistry = $this->fileAnalyserProvider->getRules();
 
-        $collectorsRegistry = new \PHPStan\Collectors\Registry([]);
+        /** @phpstan-ignore phpstanApi.constructor */
+        $collectorsRegistry = new Registry([]);
 
+        /** @phpstan-ignore phpstanApi.method */
         $fileAnalyserResult = $fileAnalyser->analyseFile(
-            $compiledTemplate->getPhpFilePath(),
+            $compiledTemplate->phpFilePath,
             [],
-            $this->registry,
+            $templateRulesRegistry,
             $collectorsRegistry,
             null
         );
 
-        /** @var Error[] $ruleErrors */
+        /** @phpstan-ignore phpstanApi.method */
         $ruleErrors = $fileAnalyserResult->getErrors();
 
         $usefulRuleErrors = $this->errorFilter->filterErrors($ruleErrors);
 
         return $this->templateErrorsFactory->createErrors(
             $usefulRuleErrors,
-            $compiledTemplate->getPhpLine(),
-            $compiledTemplate->getBladeFilePath(),
-            $compiledTemplate->getLineMap(),
+            $compiledTemplate->phpLine,
+            $compiledTemplate->bladeFilePath,
+            $compiledTemplate->phpFileContentsWithLineMap,
         );
     }
 
     /**
-     * @param VariableAndType[] $variablesAndTypes
+     * @throws InvalidArgumentException
      */
     private function compileToPhp(
-        string $templateFilePath,
-        array $variablesAndTypes,
+        RenderTemplateWithParameters $renderTemplateWithParameters,
         string $filePath,
         int $phpLine
     ): ?CompiledTemplate {
-        $fileContents = file_get_contents($templateFilePath);
+        $resolvedTemplateFilePath = $this->templateFilePathResolver->resolveExistingFilePath(
+            $renderTemplateWithParameters->templateName
+        );
+        $fileContents = file_get_contents($resolvedTemplateFilePath);
         if ($fileContents === false) {
             return null;
         }
 
         $phpFileContentsWithLineMap = $this->bladeToPhpCompiler->compileContent(
-            $templateFilePath,
+            $resolvedTemplateFilePath,
+            $renderTemplateWithParameters->templateName,
             $fileContents,
-            $variablesAndTypes
+            $renderTemplateWithParameters->parametersArray
         );
 
-        $phpFileContents = $phpFileContentsWithLineMap->getPhpFileContents();
+        $phpFileContents = $phpFileContentsWithLineMap->phpFileContents;
 
         $tmpFilePath = sys_get_temp_dir() . '/' . md5($filePath) . '-blade-compiled.php';
         file_put_contents($tmpFilePath, $phpFileContents);

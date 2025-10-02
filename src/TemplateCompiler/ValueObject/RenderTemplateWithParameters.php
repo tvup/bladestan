@@ -2,25 +2,16 @@
 
 declare(strict_types=1);
 
-namespace TomasVotruba\Bladestan\TemplateCompiler\ValueObject;
+namespace Bladestan\TemplateCompiler\ValueObject;
 
-use PhpParser\Node\Expr\Array_;
+use PHPStan\Type\Type;
 
 final class RenderTemplateWithParameters
 {
     public function __construct(
-        private readonly string $templateFilePath,
-        private readonly Array_ $parametersArray
+        public readonly string $templateName,
+        /** @var array<string, Type> */
+        public readonly array $parametersArray
     ) {
-    }
-
-    public function getTemplateFilePath(): string
-    {
-        return $this->templateFilePath;
-    }
-
-    public function getParametersArray(): Array_
-    {
-        return $this->parametersArray;
     }
 }

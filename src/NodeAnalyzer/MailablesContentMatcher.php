@@ -2,25 +2,27 @@
 
 declare(strict_types=1);
 
-namespace TomasVotruba\Bladestan\NodeAnalyzer;
+namespace Bladestan\NodeAnalyzer;
 
+use Bladestan\TemplateCompiler\ValueObject\RenderTemplateWithParameters;
 use Illuminate\Mail\Mailables\Content;
-use PhpParser\Node\Expr\Array_;
+use Illuminate\Mail\Message;
 use PhpParser\Node\Expr\New_;
 use PhpParser\Node\Name;
+use PhpParser\Node\Scalar\String_;
 use PHPStan\Analyser\Scope;
-use TomasVotruba\Bladestan\TemplateCompiler\ValueObject\RenderTemplateWithParameters;
+use PHPStan\Type\ObjectType;
 
 final class MailablesContentMatcher
 {
     public function __construct(
-        private readonly TemplateFilePathResolver $templateFilePathResolver,
         private readonly ViewDataParametersAnalyzer $viewDataParametersAnalyzer,
+        private readonly MagicViewWithCallParameterResolver $magicViewWithCallParameterResolver,
     ) {
     }
 
     /**
-     * @return RenderTemplateWithParameters[]
+     * @return list<RenderTemplateWithParameters>
      */
     public function match(New_ $new, Scope $scope): array
     {
@@ -28,27 +30,29 @@ final class MailablesContentMatcher
             return [];
         }
 
-        $viewName = null;
-        $viewWith = new Array_();
+        $viewNames = [];
+        $parametersArray = $this->magicViewWithCallParameterResolver->resolve($new, $scope);
         foreach ($new->getArgs() as $argument) {
             $argName = (string) $argument->name;
-            if ($argName === 'view') {
-                $viewName = $argument->value;
+            if ($argument->value instanceof String_) {
+                $value = $argument->value->value;
+                if (in_array($argName, ['view', 'html', 'markdown', 'text'], true)) {
+                    $viewNames[] = $value;
+                }
             } elseif ($argName === 'with') {
-                $viewWith = $this->viewDataParametersAnalyzer->resolveParametersArray($argument, $scope);
+                $parametersArray = $this->viewDataParametersAnalyzer->resolveParametersArray($argument, $scope);
             }
         }
 
-        if ($viewName === null) {
-            return [];
+        $parametersArray += [
+            'message' => new ObjectType(Message::class),
+        ];
+
+        $templates = [];
+        foreach ($viewNames as $viewName) {
+            $templates[] = new RenderTemplateWithParameters($viewName, $parametersArray);
         }
 
-        $result = [];
-        $resolvedTemplateFilePaths = $this->templateFilePathResolver->resolveExistingFilePaths($viewName, $scope);
-        foreach ($resolvedTemplateFilePaths as $resolvedTemplateFilePath) {
-            $result[] = new RenderTemplateWithParameters($resolvedTemplateFilePath, $viewWith);
-        }
-
-        return $result;
+        return $templates;
     }
 }

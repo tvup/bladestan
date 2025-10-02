@@ -2,22 +2,16 @@
 
 declare(strict_types=1);
 
-namespace TomasVotruba\Bladestan\Tests\Compiler\BladeToPHPCompiler;
+namespace Bladestan\Tests\Compiler\BladeToPHPCompiler;
 
+use Bladestan\Compiler\BladeToPHPCompiler;
+use Bladestan\Tests\TestUtils;
 use Iterator;
 use PHPStan\Testing\PHPStanTestCase;
 use PHPUnit\Framework\Attributes\DataProvider;
-use TomasVotruba\Bladestan\Compiler\BladeToPHPCompiler;
-use TomasVotruba\Bladestan\TemplateCompiler\ValueObject\VariableAndType;
-use TomasVotruba\Bladestan\Tests\TestUtils;
 
 final class BladeToPHPCompilerTest extends PHPStanTestCase
 {
-    /**
-     * @var VariableAndType[]
-     */
-    private array $variables = [];
-
     private BladeToPHPCompiler $bladeToPHPCompiler;
 
     protected function setUp(): void
@@ -25,9 +19,6 @@ final class BladeToPHPCompilerTest extends PHPStanTestCase
         parent::setUp();
 
         $this->bladeToPHPCompiler = self::getContainer()->getByType(BladeToPHPCompiler::class);
-
-        // Setup the variable names and types that'll be available to all templates
-        $this->variables = [];
     }
 
     #[DataProvider('provideData')]
@@ -37,11 +28,12 @@ final class BladeToPHPCompilerTest extends PHPStanTestCase
 
         $phpFileContentsWithLineMap = $this->bladeToPHPCompiler->compileContent(
             'foo.blade.php',
+            'foo',
             $inputBladeContents,
-            $this->variables
+            []
         );
 
-        $this->assertSame($expectedPhpContents, $phpFileContentsWithLineMap->getPhpFileContents());
+        $this->assertSame($expectedPhpContents, $phpFileContentsWithLineMap->phpFileContents);
     }
 
     public static function provideData(): Iterator
@@ -50,7 +42,7 @@ final class BladeToPHPCompilerTest extends PHPStanTestCase
     }
 
     /**
-     * @return string[]
+     * @return list<string>
      */
     public static function getAdditionalConfigFiles(): array
     {

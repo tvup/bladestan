@@ -2,19 +2,24 @@
 
 declare(strict_types=1);
 
-namespace TomasVotruba\Bladestan\Tests\Compiler\PhpContentExtractor;
+namespace Bladestan\Tests\Compiler\PhpContentExtractor;
 
+use Bladestan\Compiler\FileNameAndLineNumberAddingPreCompiler;
+use Bladestan\PhpParser\NodeVisitor\DeleteInlineHTML;
+use Bladestan\PhpParser\SimplePhpParser;
+use Bladestan\Tests\TestUtils;
 use Illuminate\View\Compilers\BladeCompiler;
 use Iterator;
+use PhpParser\NodeTraverser;
+use PhpParser\PrettyPrinter\Standard;
 use PHPStan\Testing\PHPStanTestCase;
 use PHPUnit\Framework\Attributes\DataProvider;
-use TomasVotruba\Bladestan\Compiler\FileNameAndLineNumberAddingPreCompiler;
-use TomasVotruba\Bladestan\Compiler\PhpContentExtractor;
-use TomasVotruba\Bladestan\Tests\TestUtils;
 
 final class PhpContentExtractorTest extends PHPStanTestCase
 {
-    private PhpContentExtractor $phpContentExtractor;
+    private SimplePhpParser $simplePhpParser;
+
+    private Standard $printerStandard;
 
     private BladeCompiler $bladeCompiler;
 
@@ -24,7 +29,8 @@ final class PhpContentExtractorTest extends PHPStanTestCase
     {
         parent::setUp();
 
-        $this->phpContentExtractor = self::getContainer()->getByType(PhpContentExtractor::class);
+        $this->simplePhpParser = self::getContainer()->getByType(SimplePhpParser::class);
+        $this->printerStandard = self::getContainer()->getByType(Standard::class);
         $this->bladeCompiler = self::getContainer()->getByType(BladeCompiler::class);
         $this->fileNameAndLineNumberAddingPreCompiler = self::getContainer()->getByType(
             FileNameAndLineNumberAddingPreCompiler::class
@@ -32,18 +38,24 @@ final class PhpContentExtractorTest extends PHPStanTestCase
     }
 
     #[DataProvider('fixtureProvider')]
-    public function testExtactPhpContentsFromBladeTemlate(string $filePath): void
+    public function testExtractPhpContentsFromBladeTemplate(string $filePath): void
     {
         [$inputBladeContents, $expectedPhpContents] = TestUtils::splitFixture($filePath);
 
         $fileContent = $this->fileNameAndLineNumberAddingPreCompiler
             ->completeLineCommentsToBladeContents(
-                '/some-directory-name/resources/views/foo.blade.php',
+                realpath(__DIR__ . '/../../skeleton/resources/views/foo.blade.php') ?: '',
                 $inputBladeContents
             );
 
         $compiledPhpContents = $this->bladeCompiler->compileString($fileContent);
-        $phpFileContent = $this->phpContentExtractor->extract($compiledPhpContents);
+
+        $stmts = $this->simplePhpParser->parse($compiledPhpContents);
+        $nodeTraverser = new NodeTraverser();
+        $nodeTraverser->addVisitor(new DeleteInlineHTML());
+
+        $stmts = $nodeTraverser->traverse($stmts);
+        $phpFileContent = $this->printerStandard->prettyPrintFile($stmts) . "\n";
 
         $this->assertSame($expectedPhpContents, $phpFileContent);
     }
@@ -54,7 +66,7 @@ final class PhpContentExtractorTest extends PHPStanTestCase
     }
 
     /**
-     * @return string[]
+     * @return list<string>
      */
     public static function getAdditionalConfigFiles(): array
     {

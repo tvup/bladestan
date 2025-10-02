@@ -2,29 +2,15 @@
 
 declare(strict_types=1);
 
-namespace TomasVotruba\Bladestan\TemplateCompiler;
+namespace Bladestan\TemplateCompiler;
 
 use PHPStan\Analyser\Error;
 
 /**
- * @see \TomasVotruba\Bladestan\Tests\TemplateCompiler\ErrorFilterTest
+ * @see \Bladestan\Tests\TemplateCompiler\ErrorFilterTest
  */
 final class ErrorFilter
 {
-    /**
-     * @var string[]
-     */
-    private const ERRORS_TO_IGNORE_REGEXES = [
-        '#Anonymous function has an unused use (.*?)#',
-        '#Variable \$__env might not be defined#',
-        // e() function for render can accept more values than strings
-        '#Parameter \#1 \$value of function e expects BackedEnum\|Illuminate(.*?)\|string\|null, (int|float) given#',
-        // forms errors, given optionally
-        '#Variable \$errors might not be defined#',
-        '#Offset 1 on array{\'(.*?)\'} on left side of \?\? does not exist#',
-        '#Undefined variable\: \$errors#',
-    ];
-
     /**
      * @param Error[] $ruleErrors
      * @return Error[]
@@ -32,24 +18,26 @@ final class ErrorFilter
     public function filterErrors(array $ruleErrors): array
     {
         foreach ($ruleErrors as $key => $ruleError) {
-            if (! $this->isAllowedErrorMessage($ruleError->getMessage())) {
-                continue;
+            if ($this->isAllowedErrorMessage($ruleError)) {
+                unset($ruleErrors[$key]);
             }
-
-            unset($ruleErrors[$key]);
         }
 
         return $ruleErrors;
     }
 
-    private function isAllowedErrorMessage(string $errorMessage): bool
+    private function isAllowedErrorMessage(Error $ruleError): bool
     {
-        foreach (self::ERRORS_TO_IGNORE_REGEXES as $errorToIgnoreRegex) {
-            if (preg_match($errorToIgnoreRegex, $errorMessage)) {
-                return true;
-            }
+        $identifier = $ruleError->getIdentifier();
+        if ($identifier === 'closure.unusedUse') {
+            // Inlined templates gets all variables forwarded since we don't check what they use beforehand
+            return true;
         }
 
-        return false;
+        // forms errors, given optionally
+        return $identifier === 'nullCoalesce.offset' && preg_match(
+            '/^Offset 1 on array{\'(.*?)\'} on left side of \?\? does not exist\.$/',
+            $ruleError->getMessage()
+        );
     }
 }

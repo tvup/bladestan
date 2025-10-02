@@ -1,102 +1,129 @@
 <?php
 
-namespace TomasVotruba\Bladestan\Compiler;
+namespace Bladestan\Compiler;
 
-use Exception;
-use Illuminate\View\AnonymousComponent;
+use Bladestan\Exception\ShouldNotHappenException;
+use Bladestan\PhpParser\ArrayStringToArrayConverter;
+use Illuminate\Support\Facades\Config;
+use Illuminate\Support\Str;
+use ReflectionClass;
+use ReflectionNamedType;
+use RuntimeException;
 
-class LivewireTagCompiler extends ComponentTagCompiler
+class LivewireTagCompiler
 {
-    public function compile(string $value): string
-    {
-        return $this->compileLivewireSelfClosingTags($value);
+    /**
+     * @see https://regex101.com/r/4c923z/1
+     * @var string
+     */
+    private const LIVEWIRE_REGEX = '/\s*\$__split = function \(\$name, \$params = \[\]\) {
+\s*    return \[\$name, \$params\];
+\s*};
+\s*\[\$__name, \$__params\] = \$__split\(\'([^\']*?)\', (.+?)\);
+\s*\$__html = app\(\'livewire\'\)->mount\(\$__name, \$__params, .+?, \$__slots \?\? \[\], get_defined_vars\(\)\);
+\s*echo \$__html;
+\s*unset\(\$__html\);
+\s*unset\(\$__name\);
+\s*unset\(\$__params\);
+\s*unset\(\$__split\);
+\s*if \(isset\(\$__slots\)\) {
+\s*    unset\(\$__slots\);
+\s*}/s';
+
+    /**
+     * Create a new component tag compiler.
+     */
+    public function __construct(
+        protected ArrayStringToArrayConverter $arrayStringToArrayConverter
+    ) {
     }
 
-    protected function compileLivewireSelfClosingTags(string $value): string
+    public function replace(string $rawPhpContent): string
     {
-        $pattern = "/
-            <
-                \s*
-                livewire\:([\w\-\:\.]*)
-                \s*
-                (?<attributes>
-                    (?:
-                        \s+
-                        [\w\-:.@]+
-                        (
-                            =
-                            (?:
-                                \\\"[^\\\"]*\\\"
-                                |
-                                \'[^\']*\'
-                                |
-                                [^\'\\\"=<>]+
-                            )
-                        )?
-                    )*
-                    \s*
-                )
-            \/?>
-        /x";
-
-        return preg_replace_callback($pattern, function (array $matches): string {
-            $attributes = $this->getAttributesFromAttributeString($matches['attributes']);
-
-            // Convert all kebab-cased to camelCase.
-            $attributes = collect($attributes)
-                ->mapWithKeys(function ($value, $key) {
-                    // Skip snake_cased attributes.
-                    if (is_int($key) || str($key)->contains('_')) {
-                        return [
-                            strval($key) => $value,
-                        ];
-                    }
-
-                    return [
-                        (string) str($key)
-                            ->camel() => $value,
-                    ];
-                })->toArray();
-
-            // Convert all snake_cased attributes to camelCase, and merge with
-            // existing attributes so both snake and camel are available.
-            $attributes = collect($attributes)
-                ->mapWithKeys(function ($value, $key) {
-                    // Skip snake_cased attributes
-                    if (! str($key)->contains('_')) {
-                        return [
-                            strval($key) => false,
-                        ];
-                    }
-
-                    return [
-                        (string) str($key)
-                            ->camel() => $value,
-                    ];
-                })->filter()
-                ->merge($attributes)
-                ->toArray();
-
-            $component = $matches[1];
-
-            if ($component === 'styles') {
-                return '@livewireStyles';
-            }
-
-            if ($component === 'scripts') {
-                return '@livewireScripts';
-            }
-
-            return $this->componentString(AnonymousComponent::class, $attributes);
-        }, $value) ?? throw new Exception('preg_replace_callback error');
+        return preg_replace_callback(self::LIVEWIRE_REGEX, function (array $match): string {
+            $attributes = $this->arrayStringToArrayConverter->convert($match[2]);
+            return $this->componentString($match[1], $attributes);
+        }, $rawPhpContent) ?? throw new ShouldNotHappenException('preg_replace_callback error');
     }
 
     /**
-     * @param array<string, mixed> $attributes
+     * @param array<string> $attributes
      */
-    protected function componentString(string $component, array $attributes): string
+    private function componentString(string $component, array $attributes): string
     {
-        $attrString = $this->attributesToString($attributes, $escapeBound = false);
-        return sprintf('<?php echo %s::resolve([%s])->render(); ?>', $component, $attrString);
+        $class = $this->getComponentClass($component);
+
+        $mount = '';
+        if (class_exists($class) && method_exists($class, 'mount')) {
+            $mountArgs = [];
+
+            $parameters = (new ReflectionClass($class))->getMethod('mount')
+                ->getParameters();
+            foreach ($parameters as $parameter) {
+                $paramName = $parameter->getName();
+                if (isset($attributes[$paramName])) {
+                    $mountArgs[$paramName] = $attributes[$paramName];
+                    unset($attributes[$paramName]);
+                    continue;
+                }
+
+                // Resolve any additional required arguments
+
+                $paramType = $parameter->getType();
+                if (! $paramType instanceof ReflectionNamedType) {
+                    continue;
+                }
+
+                if ($paramType->allowsNull()) {
+                    $mountArgs[$paramName] = 'null';
+                    continue;
+                }
+
+                $paramClass = $paramType->getName();
+                if (class_exists($paramClass) || interface_exists($paramClass)) {
+                    $mountArgs[$paramName] = "resolve({$paramClass}::class)";
+                    continue;
+                }
+            }
+
+            if ($mountArgs !== []) {
+                $attrString = collect($mountArgs)
+                    ->map(function (mixed $value, string $attribute): string {
+                        return "{$attribute}: {$value}";
+                    })
+                    ->implode(', ');
+
+                $mount = " \$component->mount({$attrString});";
+            }
+        }
+
+        $properties = collect($attributes)
+            ->map(function (mixed $value, string $attribute): string {
+                return "\$component->{$attribute} = {$value}";
+            })
+            ->implode('; ');
+        if ($properties) {
+            $properties = " {$properties};";
+        }
+
+        return "\$component = new {$class}();{$mount}{$properties}";
+    }
+
+    private function getComponentClass(string $view): string
+    {
+        try {
+            $namespace = Config::string('livewire.class_namespace');
+        } catch (RuntimeException) {
+            $namespace = 'App\\Livewire';
+        }
+
+        // Convert the view string to PascalCase for the class name
+        $className = collect(explode('.', $view))
+            ->map(function (string $part): string {
+                return Str::studly($part);
+            })
+            ->implode('\\');
+
+        return "{$namespace}\\{$className}";
     }
 }
